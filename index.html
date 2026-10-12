@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>マスタリング前後の聴き比べ</title>
+<style>
+:root{--bg:#fff;--fg:#1c1c1e;--sub:#6b6b70;--card:#f5f5f7;--accent:#2f6fed;--line:#dcdce0}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#f2f2f4;--sub:#9a9aa2;--card:#1f1f23;--accent:#6c9bff;--line:#34343a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 system-ui,"Hiragino Sans","Yu Gothic",sans-serif}
+main{max-width:720px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.4rem;margin:0 0 4px}
+.lead{color:var(--sub);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 20px}
+.card h2{font-size:1.1rem;margin:0 0 4px}
+.meta{color:var(--sub);font-size:.85rem;margin:0 0 12px}
+.note{font-size:.9rem;border-left:3px solid var(--accent);padding:4px 10px;margin:0 0 12px}
+.ab{display:flex;gap:8px;margin:0 0 12px}
+.ab button{flex:1;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;cursor:pointer}
+.ab button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.row{display:flex;align-items:center;gap:10px}
+.row button{padding:8px 16px;border:0;border-radius:8px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+.row input[type=range]{flex:1}
+.time{font-variant-numeric:tabular-nums;color:var(--sub);font-size:.85rem;min-width:92px;text-align:right}
+label.vol{display:block;margin-top:10px;font-size:.9rem;color:var(--sub)}
+footer{color:var(--sub);font-size:.8rem}
+</style>
+</head>
+<body>
+<main>
+<h1>マスタリング前後の聴き比べ</h1>
+<p class="lead">Suno の元音源と、マスタリング後を切り替えて聴けます。再生位置は切り替えても保たれます。</p>
+<div id="songs"></div>
+<footer>音源はすべて自作曲です。マスターは MP3 320kbps、元音源はダウンロードしたままのファイルです。</footer>
+</main>
+<script>
+var SONGS=[
+ {title:"Awaken Revolution",
+  orig:"awaken_original.mp3",master:"awaken_master.mp3",
+  origLufs:-15.6,masterLufs:-10.9,
+  note:""},
+ {title:"咆哮",
+  orig:"houkou_original.mp3",master:"houkou_master.mp3",
+  origLufs:-16.2,masterLufs:-9.0,
+  note:"マスター版には、シンセ2トラックを追加しています(元音源にはありません)。"}
+];
+var ctx=null;
+function fmt(s){s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+":"+("0"+s%60).slice(-2)}
+SONGS.forEach(function(s,i){
+  var el=document.createElement("section");el.className="card";
+  el.innerHTML=
+   '<h2></h2><p class="meta"></p>'+(s.note?'<p class="note"></p>':'')+
+   '<div class="ab"><button data-w="orig" class="on">元音源</button><button data-w="master">マスター後</button></div>'+
+   '<div class="row"><button class="play">再生</button><input type="range" min="0" max="1000" value="0"><span class="time">0:00 / 0:00</span></div>'+
+   '<label class="vol"><input type="checkbox" class="match" checked> 音量を揃えて聴く(マスター側を元音源の音量に合わせて下げる)</label>';
+  el.querySelector("h2").textContent=s.title;
+  el.querySelector(".meta").textContent="元音源 "+s.origLufs+" LUFS / マスター "+s.masterLufs+" LUFS";
+  if(s.note)el.querySelector(".note").textContent=s.note;
+  document.getElementById("songs").appendChild(el);
+  var a={orig:new Audio(s.orig),master:new Audio(s.master)};
+  a.orig.preload=a.master.preload="metadata";
+  var cur="orig",nodes=null;
+  var btnPlay=el.querySelector(".play"),seek=el.querySelector("input[type=range]"),tm=el.querySelector(".time"),match=el.querySelector(".match");
+  function setup(){
+    if(nodes)return;
+    var C=window.AudioContext||window.webkitAudioContext;
+    if(!C)return;
+    ctx=ctx||new C();
+    nodes={orig:ctx.createGain(),master:ctx.createGain()};
+    ["orig","master"].forEach(function(k){
+      try{ctx.createMediaElementSource(a[k]).connect(nodes[k]);nodes[k].connect(ctx.destination);}catch(e){nodes=null}
+    });
+    applyGain();
+  }
+  function applyGain(){
+    if(!nodes)return;
+    nodes.orig.gain.value=1;
+    nodes.master.gain.value=match.checked?Math.pow(10,(s.origLufs-s.masterLufs)/20):1;
+  }
+  function active(){return a[cur]}
+  function update(){
+    var d=active().duration||0;
+    seek.value=d?Math.round(active().currentTime/d*1000):0;
+    tm.textContent=fmt(active().currentTime)+" / "+fmt(d);
+  }
+  btnPlay.onclick=function(){
+    setup();
+    if(ctx&&ctx.state==="suspended")ctx.resume();
+    if(active().paused){
+      Object.keys(a).forEach(function(k){if(k!==cur)a[k].pause()});
+      window.__stopOthers&&window.__stopOthers(i);
+      active().play();btnPlay.textContent="一時停止";
+    }else{active().pause();btnPlay.textContent="再生"}
+  };
+  el.querySelectorAll(".ab button").forEach(function(b){
+    b.onclick=function(){
+      var next=b.dataset.w;if(next===cur)return;
+      var t=active().currentTime,was=!active().paused;
+      active().pause();cur=next;
+      a[cur].currentTime=t;
+      if(was)a[cur].play();
+      el.querySelectorAll(".ab button").forEach(function(x){x.classList.toggle("on",x===b)});
+      update();
+    };
+  });
+  match.onchange=applyGain;
+  seek.oninput=function(){var d=active().duration||0;active().currentTime=d*seek.value/1000;update()};
+  ["orig","master"].forEach(function(k){
+    a[k].addEventListener("timeupdate",function(){if(k===cur)update()});
+    a[k].addEventListener("loadedmetadata",update);
+    a[k].addEventListener("ended",function(){btnPlay.textContent="再生"});
+  });
+  window.__stoppers=window.__stoppers||[];
+  window.__stoppers[i]=function(){Object.keys(a).forEach(function(k){a[k].pause()});btnPlay.textContent="再生"};
+});
+window.__stopOthers=function(me){(window.__stoppers||[]).forEach(function(f,j){if(j!==me&&f)f()})};
+</script>
+</body>
+</html>
